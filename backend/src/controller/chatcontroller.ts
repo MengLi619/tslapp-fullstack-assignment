@@ -4,7 +4,9 @@ import { StatusCodes } from 'http-status-codes';
 import { Chat } from '../entity/chat';
 import { getRepository } from '../component/db';
 import { Message } from '../entity/message';
-import { ChatResponse, CompletionRequest, MessageResponse } from '../component/types';
+import { ChatResponse, CompletionRequest, MessageResponse, Role } from '../component/types';
+import { SSEResponse } from '../component/sseResponse';
+import { completion } from '../component/openai';
 
 function getMessageResponse(message: Message): MessageResponse {
   return {
@@ -60,5 +62,26 @@ export class ChatController {
     // 1. Call `completion` method in ../component/openai.ts
     // 2. Respond by SSE stream
     // 3. Support chat context
+    const chat = await this.chatRepository.findOneByOrFail({ id: chatId });
+    await this.messageRepository.save(this.messageRepository.create({
+      chat: chat,
+      role: Role.user,
+      content: request.userMessage,
+    }));
+    const sse = new SSEResponse(res);
+    const messages = await this.messageRepository.find({
+      where: { chat: { id: chat.id } },
+      order: { createTime: 'ASC' },
+    });
+    const chunks: string[] = [];
+    for await (const chunk of completion(messages)) {
+      sse.send(chunk);
+      chunks.push(chunk);
+    }
+    await this.messageRepository.save({
+      chat: chat,
+      role: Role.assistant,
+      content: chunks.join(''),
+    });
   }
 }
